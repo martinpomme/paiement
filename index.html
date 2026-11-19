@@ -331,6 +331,34 @@
     if (controller) { controller.abort(); controller = null; }
   }
 
+  let audioCtx = null;
+  function unlockAudio() {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      if (!audioCtx) audioCtx = new AC();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    } catch (_) {}
+  }
+  function ting() {
+    if (!audioCtx) return;
+    try {
+      const t = audioCtx.currentTime;
+      [[1568, 0.30], [2352, 0.14]].forEach(([freq, vol]) => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+        osc.connect(gain).connect(audioCtx.destination);
+        osc.start(t);
+        osc.stop(t + 0.95);
+      });
+    } catch (_) {}
+  }
+
   function succeed() {
     if (finished) return;
     finished = true;
@@ -341,7 +369,8 @@
     $('paidAmount').textContent = eur.format(cents / 100);
     $('paidDate').textContent = now.toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
     $('paidRef').textContent = ref;
-    buzz([70, 50, 70]);
+    buzz([150, 80, 150]);
+    ting();
     show('done');
   }
 
@@ -388,11 +417,39 @@
     coverMs: 2000,       // durée de couverture qui valide le paiement
     ratio: 0.5,          // couvert = luminosité sous 50 % de la mesure initiale
     minBaseline: 6,      // en dessous, la pièce est trop sombre pour détecter
+    uniformFrac: 0.6,    // part de l'image occupée par une même couleur (carte blanche, etc.)
+    uniformTol: 45,      // écart de couleur toléré pour « même couleur » (0-441)
+    colorShift: 40,      // changement de couleur minimal si la scène de départ était déjà uniforme
     intervalMs: 100
   };
   let lastMode = 'nfc';
   let camStream = null;
   let camTimer = null;
+
+  // Analyse une image réduite : luminosité moyenne, part occupée par la couleur
+  // dominante (carte blanche, doigt, etc.) et cette couleur.
+  function analyse(px) {
+    const n = px.length / 4;
+    let sum = 0;
+    const cnt = new Array(64).fill(0), sr = new Array(64).fill(0),
+          sg = new Array(64).fill(0), sb = new Array(64).fill(0);
+    for (let i = 0; i < px.length; i += 4) {
+      const r = px[i], g = px[i + 1], b = px[i + 2];
+      sum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const k = ((r >> 6) << 4) | ((g >> 6) << 2) | (b >> 6);
+      cnt[k]++; sr[k] += r; sg[k] += g; sb[k] += b;
+    }
+    let best = 0;
+    for (let k = 1; k < 64; k++) if (cnt[k] > cnt[best]) best = k;
+    const color = [sr[best] / cnt[best], sg[best] / cnt[best], sb[best] / cnt[best]];
+    const tol2 = CAM.uniformTol * CAM.uniformTol;
+    let near = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      const dr = px[i] - color[0], dg = px[i + 1] - color[1], db = px[i + 2] - color[2];
+      if (dr * dr + dg * dg + db * db <= tol2) near++;
+    }
+    return { lum: sum / n, uni: near / n, color };
+  }
 
   function stopCamera() {
     if (camTimer) { clearInterval(camTimer); camTimer = null; }
@@ -451,30 +508,37 @@
       if (finished || video.readyState < 2) return;
       ctx.drawImage(video, 0, 0, W, H);
       const px = ctx.getImageData(0, 0, W, H).data;
-      let sum = 0;
-      for (let i = 0; i < px.length; i += 4) {
-        sum += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
-      }
-      const lum = sum / (px.length / 4);
+      const { lum, uni, color } = analyse(px);
       const now = performance.now();
 
       if (baseline === null) {
-        samples.push(lum);
+        samples.push({ lum, uni, color });
         if (now - calibStart >= CAM.calibrationMs && samples.length >= 3) {
-          const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
-          if (avg < CAM.minBaseline) {
+          const m = samples.length;
+          const avgLum = samples.reduce((acc, x) => acc + x.lum, 0) / m;
+          if (avgLum < CAM.minBaseline) {
             setStatus('Il fait trop sombre pour détecter. Éclairez la pièce.', true);
             samples = [];
             calibStart = now;
             return;
           }
-          baseline = avg;
+          baseline = {
+            lum: avgLum,
+            uni: samples.reduce((acc, x) => acc + x.uni, 0) / m,
+            color: [0, 1, 2].map(c => samples.reduce((acc, x) => acc + x.color[c], 0) / m)
+          };
           setStatus('Couvrez l’objectif de la caméra pendant 2 secondes.');
         }
         return;
       }
 
-      if (lum < baseline * CAM.ratio) {
+      // Couvert = image nettement plus sombre, OU une même couleur (carte blanche,
+      // doigt…) occupe la majorité de l'image et la scène a changé par rapport au départ.
+      const dark = lum < baseline.lum * CAM.ratio;
+      const dist = Math.hypot(color[0] - baseline.color[0], color[1] - baseline.color[1], color[2] - baseline.color[2]);
+      const uniform = uni >= CAM.uniformFrac && (baseline.uni < CAM.uniformFrac || dist > CAM.colorShift);
+
+      if (dark || uniform) {
         if (coveredSince === null) {
           coveredSince = now;
           setStatus('Continuez à couvrir l’objectif…');
@@ -487,10 +551,10 @@
     }, CAM.intervalMs);
   }
 
-  $('payBtn').addEventListener('click', () => { if (cents > 0) startScan(); });
-  $('iphoneBtn').addEventListener('click', startCamera);
-  $('retryBtn').addEventListener('click', () => { lastMode === 'camera' ? startCamera() : startScan(); });
-  $('fakeBtn').addEventListener('click', succeed);
+  $('payBtn').addEventListener('click', () => { if (cents > 0) { unlockAudio(); startScan(); } });
+  $('iphoneBtn').addEventListener('click', () => { unlockAudio(); startCamera(); });
+  $('retryBtn').addEventListener('click', () => { unlockAudio(); lastMode === 'camera' ? startCamera() : startScan(); });
+  $('fakeBtn').addEventListener('click', () => { unlockAudio(); succeed(); });
   $('cancelBtn').addEventListener('click', () => { stopScan(); stopCamera(); finished = true; show('entry'); });
   $('againBtn').addEventListener('click', () => { cents = 0; renderAmount(); show('entry'); });
 
