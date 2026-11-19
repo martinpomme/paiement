@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#16233f">
+<title>Terminal de paiement (simulation)</title>
+<style>
+  :root{
+    --ink:#16233f;
+    --ink-soft:#24355c;
+    --paper:#eef1f5;
+    --key:#ffffff;
+    --line:#d5dbe5;
+    --accent:#2347f5;
+    --accent-dark:#1a37c4;
+    --ok:#0e8f64;
+    --err:#c9372c;
+    --muted:#5d6b82;
+    --on-ink:#f4f6fb;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;margin:0}
+  body{
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    background:var(--paper);
+    color:var(--ink);
+    touch-action:manipulation;
+    overscroll-behavior:none;
+    -webkit-user-select:none;user-select:none;
+  }
+  button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+  :focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+  [hidden]{display:none !important}
+
+  .screen{
+    min-height:100dvh;
+    display:flex;flex-direction:column;
+    padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+
+  /* ---------- Saisie ---------- */
+  .display{
+    background:var(--ink);
+    color:var(--on-ink);
+    padding:calc(env(safe-area-inset-top,0px) + 22px) 24px 26px;
+    border-radius:0 0 28px 28px;
+  }
+  .display .label{margin:0 0 6px;font-size:15px;color:#aebbd8}
+  .amount{
+    margin:0;
+    font-size:clamp(44px,15vw,64px);
+    font-weight:700;
+    letter-spacing:-.02em;
+    font-variant-numeric:tabular-nums;
+    line-height:1.05;
+    overflow-wrap:anywhere;
+  }
+  .amount.empty{color:#7f8fb3}
+  .sim-note{margin:14px 0 0;font-size:13px;color:#aebbd8}
+
+  .pad{
+    flex:1;
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    grid-auto-rows:1fr;
+    gap:10px;
+    padding:18px 16px 12px;
+  }
+  .key{
+    background:var(--key);
+    border-radius:18px;
+    font-size:30px;
+    font-weight:600;
+    font-variant-numeric:tabular-nums;
+    min-height:64px;
+    box-shadow:0 1px 0 var(--line);
+    transition:transform .08s,background .08s;
+  }
+  .key:active{transform:scale(.96);background:#dfe5f1}
+  .key.aux{background:transparent;box-shadow:none;color:var(--muted);font-size:26px}
+  .key.aux:active{background:#dfe5f1}
+
+  .actions{padding:4px 16px 16px}
+  .pay{
+    width:100%;
+    min-height:68px;
+    border-radius:20px;
+    background:var(--accent);
+    color:#fff;
+    font-size:21px;
+    font-weight:700;
+    transition:background .15s,opacity .15s;
+  }
+  .pay:active{background:var(--accent-dark)}
+  .pay:disabled{opacity:.4;cursor:not-allowed}
+
+  /* ---------- Attente NFC ---------- */
+  #wait{
+    background:var(--ink);color:var(--on-ink);
+    align-items:center;justify-content:center;text-align:center;
+    padding:calc(env(safe-area-inset-top,0px) + 24px) 28px 24px;
+  }
+  #wait .amount{font-size:clamp(40px,13vw,56px)}
+  .radar{
+    position:relative;
+    width:200px;height:200px;
+    margin:34px 0 28px;
+    display:grid;place-items:center;
+  }
+  .radar svg{width:84px;height:84px;position:relative;z-index:1}
+  .radar i{
+    position:absolute;inset:0;border-radius:50%;
+    border:2px solid rgba(244,246,251,.55);
+    opacity:0;
+    animation:ping 2.4s ease-out infinite;
+  }
+  .radar i:nth-child(2){animation-delay:.8s}
+  .radar i:nth-child(3){animation-delay:1.6s}
+  @keyframes ping{
+    0%{transform:scale(.45);opacity:.9}
+    100%{transform:scale(1);opacity:0}
+  }
+  .wait-title{margin:0 0 8px;font-size:22px;font-weight:700}
+  .wait-status{margin:0;min-height:48px;font-size:16px;line-height:1.4;color:#c4cee6;max-width:30ch}
+  .wait-status.error{color:#ffb4ad}
+  .stack{display:flex;flex-direction:column;gap:10px;width:100%;max-width:340px;margin-top:22px}
+  .btn{
+    min-height:56px;border-radius:16px;font-size:17px;font-weight:600;padding:0 18px;
+  }
+  .btn.primary{background:#fff;color:var(--ink)}
+  .btn.ghost{border:2px solid rgba(244,246,251,.35);color:var(--on-ink)}
+
+  /* ---------- Succès ---------- */
+  #done{
+    align-items:center;
+    padding:calc(env(safe-area-inset-top,0px) + 28px) 20px 20px;
+    background:var(--paper);
+  }
+  .receipt{
+    width:100%;max-width:380px;
+    background:#fff;
+    border-radius:24px;
+    padding:28px 24px 24px;
+    box-shadow:0 10px 30px rgba(22,35,63,.12);
+    text-align:center;
+    animation:rise .45s cubic-bezier(.2,.8,.2,1) both;
+  }
+  @keyframes rise{from{transform:translateY(24px);opacity:0}to{transform:none;opacity:1}}
+  .tick{
+    width:76px;height:76px;margin:0 auto 14px;border-radius:50%;
+    background:var(--ok);display:grid;place-items:center;
+  }
+  .tick svg{width:40px;height:40px}
+  .tick path{
+    stroke-dasharray:40;stroke-dashoffset:40;
+    animation:draw .45s .25s ease-out forwards;
+  }
+  @keyframes draw{to{stroke-dashoffset:0}}
+  .receipt h1{margin:0 0 4px;font-size:24px}
+  .receipt .paid{margin:0;font-size:44px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;color:var(--ink)}
+  .rows{margin:22px 0 0;padding:18px 0 0;border-top:2px dashed var(--line);text-align:left}
+  .rows div{display:flex;justify-content:space-between;gap:12px;padding:6px 0;font-size:15px}
+  .rows dt{color:var(--muted)}
+  .rows dd{margin:0;font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
+  .stamp{margin:18px 0 0;font-size:13px;color:var(--muted)}
+  #done .actions{width:100%;max-width:380px;margin-top:auto;padding:20px 0 0}
+
+  /* ---------- Bloc desktop ---------- */
+  #gate{
+    align-items:center;justify-content:center;text-align:center;padding:32px;
+    background:var(--ink);color:var(--on-ink);
+  }
+  #gate h1{margin:0 0 10px;font-size:26px}
+  #gate p{margin:0;max-width:34ch;color:#c4cee6;line-height:1.5}
+
+  @media (prefers-reduced-motion:reduce){
+    .radar i{animation:none;opacity:.35;transform:scale(.8)}
+    .radar i:nth-child(2){transform:scale(.62)}
+    .radar i:nth-child(3){transform:scale(.45)}
+    .receipt{animation:none}
+    .tick path{animation:none;stroke-dashoffset:0}
+    .key{transition:none}
+  }
+</style>
+</head>
+<body>
+
+<!-- Message affiché hors téléphone -->
+<main class="screen" id="gate" hidden>
+  <h1>Ouvrez cette page sur votre téléphone</h1>
+  <p>Ce terminal de paiement simulé est conçu pour un smartphone avec NFC.</p>
+</main>
+
+<!-- 1. Saisie du montant -->
+<main class="screen" id="entry">
+  <section class="display">
+    <p class="label" id="amountLabel">Montant à payer</p>
+    <p class="amount empty" id="amount" role="status" aria-live="polite" aria-labelledby="amountLabel">0,00&nbsp;€</p>
+    <p class="sim-note">Simulation : aucun paiement réel n’est effectué.</p>
+  </section>
+
+  <section class="pad" aria-label="Pavé numérique">
+    <button class="key" data-k="1">1</button>
+    <button class="key" data-k="2">2</button>
+    <button class="key" data-k="3">3</button>
+    <button class="key" data-k="4">4</button>
+    <button class="key" data-k="5">5</button>
+    <button class="key" data-k="6">6</button>
+    <button class="key" data-k="7">7</button>
+    <button class="key" data-k="8">8</button>
+    <button class="key" data-k="9">9</button>
+    <button class="key aux" data-k="clear" aria-label="Tout effacer">Effacer</button>
+    <button class="key" data-k="0">0</button>
+    <button class="key aux" data-k="del" aria-label="Supprimer le dernier chiffre">⌫</button>
+  </section>
+
+  <div class="actions">
+    <button class="pay" id="payBtn" disabled>Payer</button>
+  </div>
+</main>
+
+<!-- 2. Attente de la puce NFC -->
+<main class="screen" id="wait" hidden>
+  <p class="amount" id="waitAmount">0,00&nbsp;€</p>
+
+  <div class="radar" aria-hidden="true">
+    <i></i><i></i><i></i>
+    <svg viewBox="0 0 48 48" fill="none" stroke="#f4f6fb" stroke-width="3.6" stroke-linecap="round">
+      <path d="M14 17c3.2 4.2 3.2 9.8 0 14"/>
+      <path d="M21 12c5.6 6.6 5.6 17.4 0 24"/>
+      <path d="M28 7c8 9 8 25 0 34"/>
+    </svg>
+  </div>
+
+  <h1 class="wait-title">Approchez la carte ou la puce</h1>
+  <p class="wait-status" id="waitStatus" role="status" aria-live="polite">Posez-la contre le dos du téléphone.</p>
+
+  <div class="stack">
+    <button class="btn primary" id="retryBtn" hidden>Réessayer</button>
+    <button class="btn primary" id="fakeBtn" hidden>Valider sans NFC (simulation)</button>
+    <button class="btn ghost" id="cancelBtn">Annuler</button>
+  </div>
+</main>
+
+<!-- 3. Paiement accepté -->
+<main class="screen" id="done" hidden>
+  <article class="receipt">
+    <div class="tick" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+    </div>
+    <h1>Paiement accepté</h1>
+    <p class="paid" id="paidAmount">0,00&nbsp;€</p>
+    <dl class="rows">
+      <div><dt>Date</dt><dd id="paidDate"></dd></div>
+      <div><dt>Référence</dt><dd id="paidRef"></dd></div>
+      <div><dt>Moyen de paiement</dt><dd>Sans contact</dd></div>
+    </dl>
+    <p class="stamp">Transaction simulée, aucun débit.</p>
+  </article>
+  <div class="actions">
+    <button class="pay" id="againBtn">Nouveau paiement</button>
+  </div>
+</main>
+
+<script>
+(() => {
+  'use strict';
+
+  const $ = id => document.getElementById(id);
+  const screens = { gate: $('gate'), entry: $('entry'), wait: $('wait'), done: $('done') };
+  const MAX_CENTS = 99999999; // 999 999,99 €
+  const eur = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' });
+
+  let cents = 0;
+  let controller = null;
+  let finished = false;
+
+  function show(name) {
+    for (const [key, el] of Object.entries(screens)) el.hidden = key !== name;
+    window.scrollTo(0, 0);
+  }
+
+  function buzz(pattern) {
+    if (navigator.vibrate) { try { navigator.vibrate(pattern); } catch (_) {} }
+  }
+
+  /* ---------- Hors téléphone ---------- */
+  const isPhone = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+  if (!isPhone) { show('gate'); return; }
+
+  /* ---------- Saisie ---------- */
+  function renderAmount() {
+    const text = eur.format(cents / 100);
+    $('amount').textContent = text;
+    $('amount').classList.toggle('empty', cents === 0);
+    $('payBtn').disabled = cents === 0;
+  }
+
+  $('entry').querySelector('.pad').addEventListener('click', e => {
+    const btn = e.target.closest('[data-k]');
+    if (!btn) return;
+    const k = btn.dataset.k;
+    if (k === 'del') cents = Math.floor(cents / 10);
+    else if (k === 'clear') cents = 0;
+    else {
+      const next = cents * 10 + Number(k);
+      if (next > MAX_CENTS) { buzz(40); return; }
+      cents = next;
+    }
+    buzz(8);
+    renderAmount();
+  });
+
+  /* ---------- NFC ---------- */
+  function setStatus(message, isError) {
+    const el = $('waitStatus');
+    el.textContent = message;
+    el.classList.toggle('error', !!isError);
+  }
+
+  function resetWaitButtons() {
+    $('retryBtn').hidden = true;
+    $('fakeBtn').hidden = true;
+  }
+
+  function stopScan() {
+    if (controller) { controller.abort(); controller = null; }
+  }
+
+  function succeed() {
+    if (finished) return;
+    finished = true;
+    stopScan();
+    const now = new Date();
+    const ref = 'SIM-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+    $('paidAmount').textContent = eur.format(cents / 100);
+    $('paidDate').textContent = now.toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
+    $('paidRef').textContent = ref;
+    buzz([70, 50, 70]);
+    show('done');
+  }
+
+  async function startScan() {
+    finished = false;
+    resetWaitButtons();
+    $('waitAmount').textContent = eur.format(cents / 100);
+    setStatus('Posez-la contre le dos du téléphone.');
+    show('wait');
+
+    if (!('NDEFReader' in window)) {
+      setStatus('Le NFC web n’est pas disponible ici. Utilisez Chrome sur un téléphone Android, ou validez sans NFC.', true);
+      $('fakeBtn').hidden = false;
+      return;
+    }
+
+    stopScan();
+    controller = new AbortController();
+    try {
+      const reader = new NDEFReader();
+      // Une puce détectée valide le paiement, qu'elle soit lisible (reading)
+      // ou non formatée NDEF (readingerror).
+      reader.addEventListener('reading', succeed);
+      reader.addEventListener('readingerror', succeed);
+      await reader.scan({ signal: controller.signal });
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      let msg = 'Impossible de lancer la lecture NFC.';
+      if (err && err.name === 'NotAllowedError') msg = 'Accès au NFC refusé. Autorisez-le pour ce site, puis réessayez.';
+      else if (err && err.name === 'NotReadableError') msg = 'Le NFC semble désactivé. Activez-le dans les réglages du téléphone, puis réessayez.';
+      else if (err && err.name === 'NotSupportedError') msg = 'Ce téléphone ne prend pas en charge le NFC.';
+      setStatus(msg, true);
+      $('retryBtn').hidden = false;
+      $('fakeBtn').hidden = false;
+    }
+  }
+
+  $('payBtn').addEventListener('click', () => { if (cents > 0) startScan(); });
+  $('retryBtn').addEventListener('click', startScan);
+  $('fakeBtn').addEventListener('click', succeed);
+  $('cancelBtn').addEventListener('click', () => { stopScan(); finished = true; show('entry'); });
+  $('againBtn').addEventListener('click', () => { cents = 0; renderAmount(); show('entry'); });
+
+  renderAmount();
+  show('entry');
+})();
+</script>
+</body>
+</html>
